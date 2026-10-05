@@ -16,7 +16,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MAIN = HERE / "main.py"
-TEMPLATE_URL = "github.com/CS1430/Betweener/blob/main/main.py"
+TEMPLATE_URL = "github.com/CS1430/betweener-lab/blob/main/main.py"
 
 MARKERS = [
     "--- Part 1: given ---",
@@ -35,29 +35,23 @@ LOW_AGE = 18
 HIGH_AGE = 21
 AGE_PROMPT = "Please enter an age --> "
 
+user_age = int(input(AGE_PROMPT))
 
-def main():
-    user_age = int(input(AGE_PROMPT))
+print("--- Part 1: given ---")
+if user_age >= LOW_AGE:
+    if user_age < HIGH_AGE:
+        print("BETWEENER")
 
-    print("--- Part 1: given ---")
-    if user_age >= LOW_AGE:
-        if user_age < HIGH_AGE:
-            print("BETWEENER")
+print("--- Part 1: yours ---")
 
-    print("--- Part 1: yours ---")
-
-    print("--- Part 2: given ---")
-    if user_age < LOW_AGE:
+print("--- Part 2: given ---")
+if user_age < LOW_AGE:
+    print("NOT BETWEENER")
+else:
+    if user_age >= HIGH_AGE:
         print("NOT BETWEENER")
-    else:
-        if user_age >= HIGH_AGE:
-            print("NOT BETWEENER")
 
-    print("--- Part 2: yours ---")
-
-
-if __name__ == "__main__":
-    main()
+print("--- Part 2: yours ---")
 '''
 
 PARTS = [
@@ -184,31 +178,27 @@ def is_marker(stmt):
             and stmt.value.args[0].value in MARKERS)
 
 
-def find_main(tree):
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "main":
-            return node
-    return None
-
-
-def split_main(tree):
-    """Find the four marker lines in main(). Returns (main_node, marker_positions) or None."""
-    main_node = find_main(tree)
-    if main_node is None:
-        return None
-    spots = [i for i, stmt in enumerate(main_node.body) if is_marker(stmt)]
-    found = [main_node.body[i].value.args[0].value for i in spots]
+def find_markers(tree):
+    """Find the four marker lines. Returns their positions in the file, or None."""
+    spots = [i for i, stmt in enumerate(tree.body) if is_marker(stmt)]
+    found = [tree.body[i].value.args[0].value for i in spots]
     if found != MARKERS:
         return None
-    return main_node, spots
+    return spots
+
+
+def is_constant(stmt):
+    """True if this line sets an ALL_CAPS name, like LOW_AGE = 18."""
+    return (isinstance(stmt, ast.Assign)
+            and all(isinstance(t, ast.Name) and t.id.isupper() for t in stmt.targets))
 
 
 def without_yours(tree):
     """A copy of the program with both 'yours' sections removed."""
     tree = copy.deepcopy(tree)
-    main_node, (m1, m2, m3, m4) = split_main(tree)
-    body = main_node.body
-    main_node.body = body[:m2 + 1] + body[m3:m4 + 1]
+    m1, m2, m3, m4 = find_markers(tree)
+    body = tree.body
+    tree.body = body[:m2 + 1] + body[m3:m4 + 1]
     return tree
 
 
@@ -218,12 +208,12 @@ def dump(nodes):
 
 def given_sections(tree):
     """Break the given code into named pieces so a change can be located."""
-    main_node, (m1, m2, m3, m4) = split_main(tree)
-    body = main_node.body
-    others = [n for n in tree.body if n is not main_node]
+    m1, m2, m3, m4 = find_markers(tree)
+    body = tree.body
+    top = body[:m1]
     return {
-        "the CONSTANTS or the bottom of the file": dump(others),
-        "the input line at the top of main()": dump(body[:m1]),
+        "the CONSTANTS": dump([n for n in top if is_constant(n)]),
+        "the input line": dump([n for n in top if not is_constant(n)]),
         "the Part 1 given code": dump(body[m1:m2 + 1]),
         "the Part 2 given code": dump(body[m3:m4 + 1]),
     }
@@ -256,7 +246,8 @@ def check_part(report, part, region, runs, runs_ok):
     if not region:
         report.line("FAIL", labels[0],
                     f"There's no code under the \"{MARKERS[1] if part['name'] == 'Part 1' else MARKERS[3]}\" line yet.\n"
-                    "Your code goes there, indented to line up with the print above it.")
+                    "Your code goes there, starting at the left edge, lined up with\n"
+                    "the print above it.")
         report.skip(*labels[1:])
         return
     report.line("PASS", labels[0])
@@ -343,8 +334,9 @@ def check_code(report):
     except SyntaxError as err:
         report.line("FAIL", "main.py has no syntax errors",
                     f"Python can't read line {err.lineno}: {err.msg}\n"
-                    "Look for a missing colon, parenthesis, or quote, and check that\n"
-                    "everything inside an if is indented one more step.")
+                    "Look for a missing colon, parenthesis, or quote.\n"
+                    "Your if starts at the left edge, like the given code. Only the\n"
+                    "lines INSIDE the if are indented one step.")
         report.skip(*later)
         return
     report.line("PASS", "main.py has no syntax errors")
@@ -352,10 +344,10 @@ def check_code(report):
     original = ast.parse(ORIGINAL)
     restore = (f"Undo with Ctrl+Z, or copy that part back from the class template:\n"
                f"{TEMPLATE_URL}")
-    if split_main(tree) is None:
+    if find_markers(tree) is None:
         report.line("FAIL", "The given code is unchanged",
-                    "main() is missing, or one of the four  print(\"--- Part ...\")  lines\n"
-                    "was changed, moved, or deleted.\n" + restore)
+                    "One of the four  print(\"--- Part ...\")  lines was changed, moved,\n"
+                    "indented, or deleted.\n" + restore)
         report.skip(*later[1:])
         return
     mine, theirs = given_sections(without_yours(tree)), given_sections(original)
@@ -384,8 +376,8 @@ def check_code(report):
     if runs_ok:
         report.line("PASS", f"main.py runs (typed {len(TEST_AGES)} different ages)")
 
-    main_node, (m1, m2, m3, m4) = split_main(tree)
-    regions = [main_node.body[m2 + 1:m3], main_node.body[m4 + 1:]]
+    m1, m2, m3, m4 = find_markers(tree)
+    regions = [tree.body[m2 + 1:m3], tree.body[m4 + 1:]]
     for part, region in zip(PARTS, regions):
         check_part(report, part, region, runs, runs_ok)
 
